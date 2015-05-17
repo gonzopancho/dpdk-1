@@ -1,0 +1,2 @@
+/usr/bin/ar cr libarp.a  CMakeFiles/arp.dir/arp.c.o
+/usr/bin/ranlib libarp.a

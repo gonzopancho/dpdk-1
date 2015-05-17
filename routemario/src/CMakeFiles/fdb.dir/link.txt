@@ -1,0 +1,2 @@
+/usr/bin/ar cr libfdb.a  CMakeFiles/fdb.dir/fdb.c.o
+/usr/bin/ranlib libfdb.a

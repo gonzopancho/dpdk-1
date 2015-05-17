@@ -1,0 +1,2 @@
+/usr/bin/ar cr libipv4.a  CMakeFiles/ipv4.dir/ipv4.c.o
+/usr/bin/ranlib libipv4.a
