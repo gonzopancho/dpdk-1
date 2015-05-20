@@ -22,19 +22,15 @@
 #include <rte_ethdev.h>
 #include <rte_mempool.h>
 #include <rte_malloc.h>
+#include <rte_hash.h>
+#include <rte_jhash.h>
 
-#include "fdb.h"
 #include "arp.h"
+#include "icmp.h"
+#include "ipv4.h"
+#include "packetdump.h"
+#include "routetable.h"
 #include "runtime.h"
-
-static int
-ip_input(struct lcore_env *env, struct rte_mbuf* buf)
-{
-    return 0;
-}
-
-#define mmalloc(x) rte_malloc("l2sw", (x), 0)
-#define mfree(x) rte_free((x))
 
 #define FDB_SIZE 1 << 20
 
@@ -43,6 +39,7 @@ ip_input(struct lcore_env *env, struct rte_mbuf* buf)
 #define MBUF_DATA_SIZE (2048 + RTE_PKTMBUF_HEADROOM)
 #define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 #define NB_MBUF   8192
+#define MBUF_SIZE (2048 + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 #define MAX_RX_QUEUE_PER_LCORE 16
 #define MAX_RX_QUEUE_PER_LCORE 16
 
@@ -64,7 +61,7 @@ struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 */
 #define RSS_HASH_KEY_LENGTH 40
 static uint8_t hash_key[RSS_HASH_KEY_LENGTH] = {
-0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+  0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
   0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
   0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
   0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
@@ -101,14 +98,21 @@ struct l2sw_port_statistics {
 /* list of per-port statistics */
 struct l2sw_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 /* ethernet addresses of ports */
-static struct ether_addr l2sw_ports_eth_addr[RTE_MAX_ETHPORTS];
-struct rte_mempool *l2sw_pktmbuf_pool = NULL;
+extern struct ether_addr port2eth[4];
+struct rte_mempool *mbuf_pool = NULL;
 static unsigned int l2sw_rx_queue_per_lcore = RTE_MAX_ETHPORTS;
 
 #define TIMER_MILLISECOND 2000000ULL /* around 1ms at 2 Ghz */
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* default period is 10 seconds */
 static int64_t timer_period = 5 * TIMER_MILLISECOND * 1000;
+
+
+
+#define ARP_ENTRY_SIZE 64
+#define ROUTE_ENTRY_SIZE  64
+struct arp_table *arp_table;
+struct route_table *route_table;
 
 /* Print out statistics on packets dropped */
 static void
@@ -128,8 +132,9 @@ print_stats(struct lcore_env *env)
 
 	printf("\nPort statistics ====================================");
 
-  uint8_t n = env->n_port;
-	for (uint8_t port_id = 0; port_id < n; port_id++) {
+        uint8_t n = env->n_port;
+        uint8_t port_id;
+	for (port_id = 0; port_id < n; port_id++) {
 		printf("\nStatistics for port %u ------------------------------"
 			   "\nPackets sent: %24"PRIu64
 			   "\nPackets received: %20"PRIu64
@@ -158,7 +163,6 @@ l2sw_send_burst(struct lcore_env* env, uint8_t dst_port, unsigned n)
 {
   struct rte_mbuf **m_table;
   unsigned ret;
-  unsigned queue_id;
   
   m_table = (struct rte_mbuf**)env->tx_mbufs[dst_port].m_table;
   
@@ -174,8 +178,8 @@ l2sw_send_burst(struct lcore_env* env, uint8_t dst_port, unsigned n)
 }
 
 static void
-l2sw_sending_packet(struct lcore_env *env, struct rte_mbuf *buf,
-                    uint8_t src_port , uint8_t dst_port)
+send_packet(struct lcore_env *env, struct rte_mbuf *buf,
+                    uint8_t dst_port)
 {
   unsigned len = env->tx_mbufs[dst_port].len;
   env->tx_mbufs[dst_port].m_table[len++] = buf;
@@ -188,84 +192,48 @@ l2sw_sending_packet(struct lcore_env *env, struct rte_mbuf *buf,
   return ;
 }
 
-static void
-l2sw_flooding(struct lcore_env *env, struct rte_mbuf *buf,
-              uint8_t src_port)
-{
-  uint8_t n = env->n_port;
-  uint8_t i = 0;
-  
-  for (uint8_t port_id = 0; port_id < n; port_id++) {
-    struct rte_mbuf *buff;
-    if (port_id == src_port) continue;
-    if (++i != n-1)
-      buff = rte_pktmbuf_clone(buf, l2sw_pktmbuf_pool);
-    else
-      buff = buf;
-    l2sw_sending_packet(env, buff, src_port, port_id);
-  }
-}
-
-static void
-ether_switching(struct lcore_env *env, struct rte_mbuf* buf,
-               uint8_t src_port)
-{
-  struct fdb_table *fdb = env->fdb;
-  struct fdb_entry *dst_entry;
-  struct ether_hdr *eth;
-  uint8_t dst_port;
-
-	eth = rte_pktmbuf_mtod(buf, struct ether_hdr *);
-  dst_entry = lookup_fdb_entry(fdb, &eth->d_addr);
-  add_fdb_entry(fdb, &eth->s_addr, src_port);;
-  if (dst_entry == NULL) {
-    l2sw_flooding(env, buf, src_port);
-  } else {
-    // XXX
-    // must check expire & if so, flooding
-    dst_port = dst_entry->port;
-    l2sw_sending_packet(env, buf, src_port, dst_port);
-  }
-}
 
 static void
 ether_in(struct lcore_env *env, struct rte_mbuf** bufs,
             unsigned n_rx, uint8_t src_port)
 {
-  for(uint32_t j = 0; j < n_rx; j++) {
+  uint32_t j;
+  for(j = 0; j < n_rx; j++) {
     int res = 0;
+    int eth_type;
     struct rte_mbuf* pkt = bufs[j];
     rte_prefetch0(rte_pktmbuf_mtod(pkt, void *));
     
     struct ether_hdr *eth = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
-    RTE_LOG(INFO, MARIO, "%s\n\tl2_len: %d\n\tl3_len:%d\n\tl4_len:%d\n",
-            __func__, pkt->l2_len, pkt->l3_len, pkt->l4_len);
+    eth_type = ntohs(eth->ether_type);
+    //RTE_LOG(INFO, MARIO, "%s\n\tl2_len: %d\n\tl3_len:%d\n\tl4_len:%d\n",
+    //        __func__, pkt->l2_len, pkt->l3_len, pkt->l4_len);
     pkt->l2_len = ETHER_HDR_LEN;
-    switch (eth->ether_type) {
-      case ETHER_TYPE_ARP: {
-        res = arp_input(env, pkt);
+    printf("eth_hdr_type : %x\n", eth->ether_type);
+    printf("eth_type_arp : %x\n", ETHER_TYPE_ARP);
+    switch (eth_type) {
+      case ETHER_TYPE_ARP : {
+        printf("arp recved\n");
+        print_eth(eth);
+        res = arp_in(pkt);
         break;
       }
-      case ETHER_TYPE_IPv4: {
-        res = ip_in(buf);
+      case ETHER_TYPE_IPv4 : {
+        printf("ip recved\n");
+        res = ip_in(pkt, src_port); //return value : port
         break;
       }
-      case ETHER_TYPE_IPv6: {
+      case ETHER_TYPE_IPv6 : {
         ;
         break;
       }
     }
 
-    /**
-     * If ret is 0, need to l2-switching.
-     * Or no need any more processing.
-     */
-    if (res) {
-      // consumed
-      continue;
-    }
+    // no need to send a packet. e.g. after receiving an arp_reply
+    if(res < -1) continue;
 
-    ether_switching(env, pkt, src_port);    
+    printf("send_packet\n");
+    send_packet(env, pkt, (res == -1) ? src_port : res); 
   }
 }
 
@@ -279,50 +247,52 @@ l2sw_main_process(struct lcore_env *env)
   const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S 
                              * BURST_TX_DRAIN_US;
   
-  RTE_LOG(INFO, MARIO, "[%u] Starting main processing.\n", lcore_id);
+  //RTE_LOG(INFO, MARIO, "[%u] Starting main processing.\n", lcore_id);
   
-	prev_tsc = 0;
-	timer_tsc = 0;
+  prev_tsc = 0;
+  timer_tsc = 0;
   while(1) {
     cur_tsc = rte_rdtsc();
     
     diff_tsc = cur_tsc - prev_tsc;
     if (unlikely(diff_tsc > drain_tsc)) {
-      for(uint8_t port_id = 0; port_id < n_ports; port_id++) {
-				if (env->tx_mbufs[port_id].len == 0)
-					continue;
-				l2sw_send_burst(env, port_id, env->tx_mbufs[port_id].len);
-				env->tx_mbufs[port_id].len = 0;
+      uint8_t port_id;
+      for(port_id = 0; port_id < n_ports; port_id++) {
+	if (env->tx_mbufs[port_id].len == 0)
+          continue;
+	l2sw_send_burst(env, port_id, env->tx_mbufs[port_id].len);
+	env->tx_mbufs[port_id].len = 0;
       }
 
-			/* if timer is enabled */
-			if (timer_period > 0) {
-				/* advance the timer */
-				timer_tsc += diff_tsc;
-				/* if timer has reached its timeout */
-				if (unlikely(timer_tsc >= (uint64_t) timer_period)) {
-					/* do this only on master core */
-					if (lcore_id == rte_get_master_lcore()) {
-						print_stats(env);
-						/* reset the timer */
-						timer_tsc = 0;
-					}
-				}
-			}
+      /* if timer is enabled */
+      if (timer_period > 0) {
+        /* advance the timer */
+        timer_tsc += diff_tsc;
+	/* if timer has reached its timeout */
+        if (unlikely(timer_tsc >= (uint64_t) timer_period)) {
+          /* do this only on master core */
+          if (lcore_id == rte_get_master_lcore()) {
+            //print_stats(env);
+            /* reset the timer */
+            timer_tsc = 0;
+          }
+        }
+      }
       prev_tsc = cur_tsc;
     }
 
     /* RX */
-    for (uint8_t port_id = 0; port_id < n_ports; port_id++) {
+    uint8_t port_id;
+    for (port_id = 0; port_id < n_ports; port_id++) {
       unsigned n_rx = rte_eth_rx_burst(port_id, lcore_id,
                                        pkt_burst, MAX_PKT_BURST);
       if (n_rx != 0)
-        RTE_LOG(INFO, MARIO, "[%u-%u] %u packet(s) came.\n",
-                lcore_id, port_id,  n_rx);
+        //RTE_LOG(INFO, MARIO, "[%u-%u] %u packet(s) came.\n",
+        //        lcore_id, port_id,  n_rx);
 
       __sync_fetch_and_add(&port_statistics[port_id].rx, n_rx);
 
-      ether_input(env, pkt_burst, n_rx, port_id);
+      ether_in(env, pkt_burst, n_rx, port_id);
     }
   }
   return ;
@@ -331,7 +301,7 @@ l2sw_main_process(struct lcore_env *env)
 static int
 l2sw_launch_one_lcore(void *env)
 {
-	RTE_LOG(INFO, MARIO, "[%u]processing launch\n", rte_lcore_id());
+  //RTE_LOG(INFO, MARIO, "[%u]processing launch\n", rte_lcore_id());
   uint8_t lcore_id = rte_lcore_id();
 
   l2sw_main_process(((struct lcore_env**) env)[lcore_id]);
@@ -384,7 +354,7 @@ l2sw_parse_args(int argc, char **argv)
       case 'q':
         l2sw_rx_queue_per_lcore = l2sw_parse_nqueue(optarg);
         if (l2sw_rx_queue_per_lcore == 0) {
-          RTE_LOG(ERR, MARIO, "Invalid queue number\n");
+          //RTE_LOG(ERR, MARIO, "Invalid queue number\n");
           return -1;
         }
         break;
@@ -408,51 +378,52 @@ check_all_ports_link_status(uint8_t port_num)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
-	uint8_t portid, count, all_ports_up, print_flag = 0;
-	struct rte_eth_link link;
+  uint8_t portid, count, all_ports_up, print_flag = 0;
+  struct rte_eth_link link;
 
-	printf("\nChecking link status");
-	fflush(stdout);
-	for (count = 0; count <= MAX_CHECK_TIME; count++) {
-		all_ports_up = 1;
-		for (portid = 0; portid < port_num; portid++) {
-			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
-			/* print link status if flag set */
-			if (print_flag == 1) {
-				if (link.link_status)
-					printf("Port %d Link Up - speed %u "
-						"Mbps - %s\n", (uint8_t)portid,
-						(unsigned)link.link_speed,
-				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
-				else
-					printf("Port %d Link Down\n",
-						(uint8_t)portid);
-				continue;
-			}
-			/* clear all_ports_up flag if any link down */
-			if (link.link_status == 0) {
-				all_ports_up = 0;
-				break;
-			}
-		}
-		/* after finally printing all link status, get out */
-		if (print_flag == 1)
-			break;
+  printf("\nChecking link status");
+  fflush(stdout);
+  rte_delay_ms(15000);
+  for (count = 0; count <= MAX_CHECK_TIME; count++) {
+    all_ports_up = 1;
+    for (portid = 0; portid < port_num; portid++) {
+      memset(&link, 0, sizeof(link));
+      rte_eth_link_get_nowait(portid, &link);
+      /* print link status if flag set */
+      if (print_flag == 1) {
+        if (link.link_status)
+          printf("Port %d Link Up - speed %u "
+                 "Mbps - %s\n", (uint8_t)portid,
+                 (unsigned)link.link_speed,
+                 (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+                 ("full-duplex") : ("half-duplex\n"));
+        else
+          printf("Port %d Link Down\n",
+            (uint8_t)portid);
+        continue;
+      }
+      /* clear all_ports_up flag if any link down */
+      if (link.link_status == 0) {
+        all_ports_up = 0;
+        break;
+      }
+    }
+    /* after finally printing all link status, get out */
+    if (print_flag == 1)
+      break;
 
-		if (all_ports_up == 0) {
-			printf(".");
-			fflush(stdout);
-			rte_delay_ms(CHECK_INTERVAL);
-		}
+    if (all_ports_up == 0) {
+      printf(".");
+      fflush(stdout);
+      rte_delay_ms(CHECK_INTERVAL);
+    }
 
-		/* set the print_flag if all ports up or timeout */
-		if (all_ports_up == 1 || count == (MAX_CHECK_TIME - 1)) {
-			print_flag = 1;
-			printf("done\n");
-		}
-	}
+    /* set the print_flag if all ports up or timeout */
+    if (all_ports_up == 1 || count == (MAX_CHECK_TIME - 1)) {
+      print_flag = 1;
+      printf("done\n");
+    }
+  }
 }
 
 int
@@ -464,7 +435,6 @@ main(int argc, char **argv)
   int ret;
   uint8_t n_ports;
   unsigned lcore_count;
-  struct fdb_table *fdb;
   
   ret = rte_eal_init(argc, argv);
   if (ret < 0)
@@ -478,18 +448,30 @@ main(int argc, char **argv)
 
   lcore_count = rte_lcore_count();
   n_ports = rte_eth_dev_count();
-  RTE_LOG(INFO, MARIO, "Find %u logical cores\n" , lcore_count);
+  //RTE_LOG(INFO, MARIO, "Find %u logical cores\n" , lcore_count);
 
-  l2sw_pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", NB_MBUF, 32, 0,
-                                              MBUF_DATA_SIZE, 
-                                              rte_socket_id());
-  if (l2sw_pktmbuf_pool == NULL)
+  mbuf_pool = rte_mempool_create("mbuf_pool", NB_MBUF, MBUF_SIZE,
+                      32, sizeof(struct rte_pktmbuf_pool_private),
+                                      rte_pktmbuf_pool_init, NULL,
+                                      rte_pktmbuf_init, NULL,
+                                      rte_socket_id(), 0);
+
+  if (mbuf_pool == NULL)
     rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
+
+// init route_table
+  route_table = create_route_table(ROUTE_ENTRY_SIZE);
+  add_staticroute(route_table);
+
+// init arp_table
+  arp_table = create_arp_table(ARP_ENTRY_SIZE);
+
+
 
   n_ports = rte_eth_dev_count();
   if (n_ports == 0) 
     rte_exit(EXIT_FAILURE, "No Ethernet ports - byte\n");
-  RTE_LOG(INFO, MARIO, "Find %u ethernet ports\n", n_ports);
+  //RTE_LOG(INFO, MARIO, "Find %u ethernet ports\n", n_ports);
 
   if (n_ports > RTE_MAX_ETHPORTS)
     n_ports = RTE_MAX_ETHPORTS;
@@ -508,44 +490,43 @@ main(int argc, char **argv)
   */
 
   /* Initialize lcore_env */
-  envs = (struct lcore_env**) mmalloc(sizeof(struct lcore_env*));
+  envs = (struct lcore_env**) rte_malloc(NULL,sizeof(struct lcore_env*),0);
   if (envs == NULL) 
     rte_exit(EXIT_FAILURE, "Cannot allocate memory for core envs\n");
 
-  fdb = create_fdb_table(FDB_SIZE);
-  if (fdb == NULL) 
-    rte_exit(EXIT_FAILURE, "Fail to create fdb\n");
-  for (uint8_t lcore_id = 0; lcore_id < lcore_count; lcore_id++) {
+  uint8_t lcore_id;
+  for (lcore_id = 0; lcore_id < lcore_count; lcore_id++) {
     struct lcore_env* env;
-    env = (struct lcore_env*) mmalloc(sizeof(struct lcore_env) +
-                                      sizeof(struct mbuf_table) *n_ports);
+    env = (struct lcore_env*) rte_malloc(NULL,sizeof(struct lcore_env) +
+                                      sizeof(struct mbuf_table) *n_ports,0);
     if (env == NULL) 
       rte_exit(EXIT_FAILURE, 
                "Cannot allocate memory for %u core env\n", lcore_id);
     env->n_port = n_ports;
     env->lcore_id = lcore_id;
-    env->fdb = fdb;
     memset(env->tx_mbufs, 0, sizeof(struct mbuf_table) * n_ports);
     envs[lcore_id] = env;
   }
 
 	/* Initialise each port */
-  for(uint8_t port_id = 0; port_id < n_ports; port_id++) {
-    RTE_LOG(INFO, MARIO, "Initializing port %u...", port_id);
+  uint8_t port_id;
+  for(port_id = 0; port_id < n_ports; port_id++) {
+    //RTE_LOG(INFO, MARIO, "Initializing port %u...", port_id);
     fflush(stdout);
     ret = rte_eth_dev_configure(port_id, lcore_count, lcore_count, &port_conf);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
                ret, (unsigned)port_id);
-    RTE_LOG(INFO, MARIO, "done\n");
-		rte_eth_macaddr_get(port_id, &l2sw_ports_eth_addr[port_id]);
+    //RTE_LOG(INFO, MARIO, "done\n");
+		rte_eth_macaddr_get(port_id, &port2eth[port_id]);
 
 		/* init one RX queue */
-    for (uint8_t core_id = 0; core_id < lcore_count; core_id++) {
+    uint8_t core_id;
+    for (core_id = 0; core_id < lcore_count; core_id++) {
       ret = rte_eth_rx_queue_setup(port_id, core_id, nb_rxd,
                                    rte_eth_dev_socket_id(port_id),
                                    NULL,
-                                   l2sw_pktmbuf_pool);
+                                   mbuf_pool);
       if (ret < 0)
         rte_exit(EXIT_FAILURE, 
                  "rte_eth_rx_queue_setup:err=%d, port=%u queue=%u\n",
@@ -553,7 +534,7 @@ main(int argc, char **argv)
     }
 
 		/* init one TX queue */
-    for (uint8_t core_id = 0; core_id < lcore_count; core_id++) {
+    for (core_id = 0; core_id < lcore_count; core_id++) {
       ret = rte_eth_tx_queue_setup(port_id, core_id, nb_txd,
                                    rte_eth_dev_socket_id(port_id), NULL);
       if (ret < 0)
@@ -570,20 +551,21 @@ main(int argc, char **argv)
 
     rte_eth_promiscuous_enable(port_id);
 
-    RTE_LOG(INFO, MARIO,
+    /*RTE_LOG(INFO, MARIO,
             "Port %u, MAC address %02x:%02x:%02x:%02x:%02x:%02x\n\n",
             port_id,
-            l2sw_ports_eth_addr[port_id].addr_bytes[0],
-            l2sw_ports_eth_addr[port_id].addr_bytes[1],
-            l2sw_ports_eth_addr[port_id].addr_bytes[2],
-            l2sw_ports_eth_addr[port_id].addr_bytes[3],
-            l2sw_ports_eth_addr[port_id].addr_bytes[4],
-            l2sw_ports_eth_addr[port_id].addr_bytes[5]);
-            
+            port2eth[port_id].addr_bytes[0],
+            port2eth[port_id].addr_bytes[1],
+            port2eth[port_id].addr_bytes[2],
+            port2eth[port_id].addr_bytes[3],
+            port2eth[port_id].addr_bytes[4],
+            port2eth[port_id].addr_bytes[5]);
+    */        
     memset(&port_statistics, 0, sizeof(port_statistics));
   }
+  
+  check_all_ports_link_status(n_ports);
 
-	check_all_ports_link_status(n_ports);
 
 	/* launch per-lcore init on every lcore */
   rte_eal_mp_remote_launch(l2sw_launch_one_lcore, envs, CALL_MASTER);
@@ -594,6 +576,9 @@ main(int argc, char **argv)
         return -1;
     }
   }
+
+  rte_free(arp_table);
+  rte_free(route_table);
 
   return 0;
 }

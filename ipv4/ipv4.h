@@ -11,9 +11,11 @@
 struct lcore_env;
 
 int
-ip_input(struct lcore_env *env, struct rte_mbuf *buf);
+ip_in(struct rte_mbuf *buf);
 
 int
-ip_output(struct lcore_env *env, struct rte_mbuf *buf);
+is_my_ip(uint32_t addr);
 
+int
+swap_ipaddr(struct rte_mbuf *buf);
 #endif

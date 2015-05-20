@@ -9,13 +9,13 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 # binary name
-APP = ipv4test
+APP = router
 
 # all source are stored in SRCS-y
-SRCS-y := routetable.c ipv4.c icmp.c packetdump.c ipv4test.c
+SRCS-y := routetable.c ipv4.c icmp.c packetdump.c arp.c router.c
 
 CFLAGS += -O3 $(USER_FLAGS)
-CFLAGS += $(WERROR_FLAGS)
+#CFLAGS += $(WERROR_FLAGS)
 
 # workaround for a gcc bug with noreturn attribute
 # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=12603

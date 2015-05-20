@@ -1,4 +1,5 @@
-dep_packetdump.o = /home/taguchi/ipv4/packetdump.c /usr/include/stdc-predef.h \
+dep_packetdump.o = /home/taguchi/router/packetdump.c \
+ /usr/include/stdc-predef.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_config.h \
  /usr/include/stdio.h /usr/include/features.h /usr/include/sys/cdefs.h \
  /usr/include/bits/wordsize.h /usr/include/gnu/stubs.h \
@@ -86,4 +87,7 @@ dep_packetdump.o = /home/taguchi/ipv4/packetdump.c /usr/include/stdc-predef.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_atomic_64.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_prefetch.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/generic/rte_prefetch.h \
- /home/taguchi/ipv4/packetdump.h
+ /home/taguchi/router/packetdump.h \
+ /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_arp.h \
+ /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_ether.h \
+ /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_random.h

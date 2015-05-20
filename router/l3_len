@@ -1,0 +1,26 @@
+arp.c:  arp_hdr = (struct arp_hdr *) (rte_pktmbuf_mtod(buf, char*) + buf->l2_len);
+arp.c:  //no need to change buf->pkt_len
+arp.c:  arp_hdr = (struct arp_hdr *) (rte_pktmbuf_mtod(buf, char*) + buf->l2_len);
+arp.c:  rte_eth_macaddr_get(buf->port, &etheraddr);
+arp.c:  arp_hdr = (struct arp_hdr *) (rte_pktmbuf_mtod(buf, char*) + buf->l2_len);
+arp.c:  ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+arp.c:  arp_hdr = (struct arp_hdr *) (rte_pktmbuf_mtod(buf, char*) + buf->l2_len);
+arp.c:  rte_memcpy(&arp_data->arp_sha.addr_bytes, (const void*) &eth_hdr->d_addr, buf->l2_len);
+arp.c:  rte_memcpy(&arp_data->arp_tha.addr_bytes, &"0x000000", buf->l2_len);
+icmp.c:    ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+icmp.c:    ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+icmp.c:    int icmplen = ntohs(ipv4_hdr->total_length) - buf->l3_len; 
+icmp.c:    struct icmphdr* icmp_hdr = (struct icmphdr*) ((char*)ipv4_hdr + buf->l3_len);
+icmp.c:    //no need to change buf->pkt_len
+icmp.c:    ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+icmp.c:    icmp_hdr = (struct icmphdr*) ((char*)ipv4_hdr + buf->l3_len);
+icmp.c:    data_len = buf->l3_len + 8;
+icmp.c:    buf->pkt_len = buf->l2_len + buf->l3_len + sizeof(struct icmphdr) + data_len;
+icmp.c:    ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+icmp.c:    icmp_hdr = (struct icmphdr*) ((char*)ipv4_hdr + buf->l3_len);
+icmp.c:    data_len = buf->l3_len + 8;
+icmp.c:    buf->pkt_len = buf->l2_len + buf->l3_len + sizeof(struct icmphdr) + data_len;
+ipv4.c:  ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+ipv4.c:  ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+ipv4.c:  ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
+ipv4.c:  buf->l3_len = (ipv4_hdr->version_ihl & IPV4_HDR_IHL_MASK) * 4;

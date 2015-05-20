@@ -14,7 +14,8 @@ uint32_t port2ip[4][2];
 
 struct route_table {
     struct rte_lpm *lpm;
-    struct rte_hash *key2nexthop;
+    struct rte_hash *nexthop2key;
+    uint32_t item[0];
 };
 
 int add_staticroute(struct route_table *route_table);

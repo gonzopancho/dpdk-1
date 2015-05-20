@@ -18,6 +18,10 @@ struct route_table {
     uint32_t item[0];
 };
 
-int add_staticroute(struct route_table *route_table);
+struct route_table* 
+create_route_table(uint32_t size);
+
+int 
+add_staticroute(struct route_table *route_table);
         
 #endif

@@ -20,15 +20,23 @@
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_ip.h>
+#include <rte_hash.h>
+#include <rte_jhash.h>
+#include <rte_random.h>
+#include <rte_lpm.h>
 
 #include "icmp.h"
+#include "ipv4.h"
 #include "packetdump.h"
+#include "routetable.h"
 
 #define MBUF_SIZE (2048 + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
 #define NB_MBUF   8192
 #define ICMPDATASIZE 64
+#define MAX_RULE_SIZE 128
 
 struct rte_mempool *mbuf_pool = NULL;
+struct route_table *route_table;
 
 int
 main(int argc, char **argv)
@@ -43,10 +51,58 @@ main(int argc, char **argv)
     mbuf_pool = rte_mempool_create("mbuf_pool", NB_MBUF, MBUF_SIZE, 
 						32, sizeof(struct rte_pktmbuf_pool_private), 
                                                 rte_pktmbuf_pool_init, NULL,
-						rte_pktmbuf_init, NULL,
+                        						rte_pktmbuf_init, NULL,
                                                 rte_socket_id(), 0);
     if(mbuf_pool == NULL)
         rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
+
+
+// init route_table
+    route_table = (struct route_table*) rte_malloc(NULL,sizeof(struct route_table),0);
+    route_table->lpm = rte_lpm_create("route_table", rte_socket_id(), MAX_RULE_SIZE, 0);
+
+    if(route_table->lpm == NULL){
+        printf("cannot create lpm table\n");
+        return 1;
+    }
+
+    rte_srand((unsigned) time (NULL));
+    uint32_t seed = (uint32_t) rte_rand();
+
+    struct rte_hash_parameters params = {
+      .name = "key2nexthop",
+      .entries = 16,
+      .bucket_entries = RTE_HASH_BUCKET_ENTRIES_MAX,
+      .key_len = 4,
+      .hash_func = rte_jhash,
+      .hash_func_init_val = seed,
+      .socket_id = (int) rte_socket_id()
+    };
+
+    route_table->nexthop2key = rte_hash_create(&params);
+
+    if(route_table->nexthop2key == NULL){
+        printf("cannot create hash table\n");
+        return 1;
+    }
+
+    add_staticroute(route_table);
+
+    //lookup test
+    printf("lookup test : 10.10.2.1\n");
+    struct in_addr addr;
+    uint32_t ipaddr;
+    uint8_t key = 0;
+
+    inet_aton("10.10.2.1", &addr);
+    ipaddr = ntohl(addr.s_addr);
+    if(rte_lpm_lookup(route_table->lpm, ipaddr, &key) != 0)
+      printf("lookup error\n");
+//    printf("nexthop : %u\n", port2ip[key][0]);
+    addr.s_addr = htonl(route_table->item[key]);
+    printf("key : %d\n", key);
+    printf("nexthop : %s\n", inet_ntoa(addr));
+
 
     //set ip header
     struct rte_mbuf *buf;
@@ -55,7 +111,6 @@ main(int argc, char **argv)
 
     struct ipv4_hdr* ipv4_hdr;
     ipv4_hdr = (struct ipv4_hdr*) (rte_pktmbuf_mtod(buf, char *) + buf->l2_len);
-    struct in_addr addr;
 
     ipv4_hdr->version_ihl = 0x45;
     ipv4_hdr->type_of_service = 0;
@@ -67,7 +122,7 @@ main(int argc, char **argv)
     ipv4_hdr->hdr_checksum = 0;
     inet_aton("10.0.0.1", &addr);
     ipv4_hdr->src_addr=ntohl(addr.s_addr);
-    inet_aton("10.0.0.2", &addr);
+    inet_aton("10.10.10.2", &addr);
     ipv4_hdr->dst_addr=ntohl(addr.s_addr);
 
     //set icmp header
@@ -84,21 +139,6 @@ main(int argc, char **argv)
     icmp_hdr->un.echo.id=0;
     icmp_hdr->un.echo.sequence=0;
 
-    //for debug
-    printf("for debug--------------------------\n");
-    printf("&iphdr           : %p\n", ipv4_hdr);
-    printf("sizeof(ipv4_hdr) : %ld\n",sizeof(struct ipv4_hdr));
-    printf("&icmphdr         : %p\n", icmp_hdr);
-    printf("sizeof(icmp_hdr) : %ld\n",sizeof(struct icmphdr));
-    printf("&icmpdata        : %p\n", data);
-    printf("icmpdata         : %s\n", data);
-    printf("\n\n");
-
-    //info of before-calcchksum pkt
-    printf("icmphdr_before_calcchksum\n");
-    print_ipv4(ipv4_hdr, PRINT_DATA);
-    printf("\n\n");
-
     //info of after-calcchksum pkt
     icmp_hdr->checksum=calc_checksum((uint16_t*)icmp_hdr, sizeof(struct icmphdr) + ICMPDATASIZE);
     ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
@@ -106,34 +146,14 @@ main(int argc, char **argv)
     print_ipv4(ipv4_hdr, PRINT_DATA);
     printf("\n\n");
 
-    //info of after-reply-processing pkt
-    icmp_echo_reply(buf);
-    //swap
-    uint32_t temp;
-    temp = ipv4_hdr->src_addr;
-    ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
-    ipv4_hdr->dst_addr = temp;
-    ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
-    printf("icmphdr_after_reply_function\n");
+    //info of ip_in
+    int port;
+    port = ip_in(buf);
+    printf("icmphdr_after_ip_in\n");
     print_ipv4(ipv4_hdr, PRINT_DATA);
-    printf("\n\n");
+    addr.s_addr = htonl(port2ip[port][0]);
+    printf("port : %d\naddr : %s\n",port, inet_ntoa(addr));
 
-    //for debug   ip_header_dump
-    print_ipv4_hex(ipv4_hdr, 64);
-
-    //info of after-time_exceeded--processing pkt
-    icmp_time_exceeded(buf);
-    ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
-    printf("icmphdr_after_timeexceeded_function\n");
-    print_ipv4(ipv4_hdr, PRINT_DATA);
-    printf("\n\n");
-
-    //info of after-destination_unreachabl3--processing pkt
-    icmp_destination_unreachable(buf, 1);
-    ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
-    printf("icmphdr_after_destination-unreachable_function\n");
-    print_ipv4(ipv4_hdr, PRINT_DATA);
-    printf("\n\n");
 
     rte_pktmbuf_free(buf);
     return 0;

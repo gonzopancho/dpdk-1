@@ -38,7 +38,7 @@ int
 remove_arp_table_entry(struct arp_table* table, const uint32_t *ip_addr);
 
 struct arp_table_entry*
-lookup_arp_entry(struct arp_table* table, const uint32_t *ip_addr);
+lookup_arp_table_entry(struct arp_table* table, uint32_t *ip_addr);
 
 int
 lookup_bulk_arp_table_entries(struct arp_table *talbe, 
@@ -47,6 +47,9 @@ lookup_bulk_arp_table_entries(struct arp_table *talbe,
                               struct arp_table_entry** entries);
 
 int
-arp_input(struct rte_mbuf* buf);
+arp_in(struct rte_mbuf* buf);
+
+int
+gen_arp_request(struct rte_mbuf* buf, uint8_t src_port);
 
 #endif

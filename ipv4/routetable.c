@@ -36,7 +36,7 @@ int add_staticroute(struct route_table *route_table){
         return 1;
     }
 
-    printf("reading interface\n");
+    printf("reading interface-------------------------\n\n");
 
     int i;
     for(i=0; i<4 ;i++){
@@ -50,6 +50,9 @@ int add_staticroute(struct route_table *route_table){
         port2ip[i][0] = ntohl(addr.s_addr); 
         inet_aton(netmask,&addr);
         port2ip[i][1] = ntohl(addr.s_addr); 
+        printf("port%d:\n",i);
+        printf("addr : %s\n",network);
+        printf("mask : %s\n\n",netmask);
     }
 
     fgets(str,20,fp);
@@ -61,7 +64,7 @@ int add_staticroute(struct route_table *route_table){
         return 1;
     }
     
-    printf("reading route\n");
+    printf("reading route----------------------------\n\n");
 
     while(fgets(str,60,fp) != NULL){
         network = strtok(str," ");
@@ -76,7 +79,8 @@ int add_staticroute(struct route_table *route_table){
         //make hash of nexthop
         inet_aton(nexthop,&addr);
         ipaddr = ntohl(addr.s_addr); 
-        key = rte_hash_add_key(route_table->key2nexthop, &ipaddr); 
+        key = rte_hash_add_key(route_table->nexthop2key, &ipaddr); 
+        route_table->item[key] = ipaddr;
 
         //get depth from netmask
         inet_aton(netmask,&addr);

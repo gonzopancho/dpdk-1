@@ -11,7 +11,7 @@
 struct lcore_env;
 
 int
-ip_in(struct rte_mbuf *buf);
+ip_in(struct rte_mbuf *buf, uint8_t src_port);
 
 int
 is_my_ip(uint32_t addr);

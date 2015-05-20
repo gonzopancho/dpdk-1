@@ -9,10 +9,10 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 # binary name
-APP = routetest
+APP = ipv4test
 
 # all source are stored in SRCS-y
-SRCS-y := routetest.c routetable.c
+SRCS-y := routetable.c ipv4.c icmp.c packetdump.c ipv4test.c
 
 CFLAGS += -O3 $(USER_FLAGS)
 CFLAGS += $(WERROR_FLAGS)

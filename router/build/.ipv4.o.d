@@ -1,4 +1,4 @@
-dep_ipv4.o = /home/taguchi/ipv4/ipv4.c /usr/include/stdc-predef.h \
+dep_ipv4.o = /home/taguchi/router/ipv4.c /usr/include/stdc-predef.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_config.h \
  /usr/include/stdio.h /usr/include/features.h /usr/include/sys/cdefs.h \
  /usr/include/bits/wordsize.h /usr/include/gnu/stubs.h \
@@ -102,9 +102,10 @@ dep_ipv4.o = /home/taguchi/ipv4/ipv4.c /usr/include/stdc-predef.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_jhash.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_errno.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_malloc.h \
- /home/taguchi/ipv4/util.h /home/taguchi/ipv4/ipv4.h \
+ /home/taguchi/router/ipv4.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_ip.h \
- /home/taguchi/ipv4/icmp.h /usr/include/netinet/ip_icmp.h \
- /usr/include/netinet/ip.h /home/taguchi/ipv4/packetdump.h \
- /home/taguchi/ipv4/routetable.h /usr/include/arpa/inet.h \
+ /home/taguchi/router/arp.h /home/taguchi/router/icmp.h \
+ /usr/include/netinet/ip_icmp.h /usr/include/netinet/ip.h \
+ /home/taguchi/router/packetdump.h /home/taguchi/router/routetable.h \
+ /usr/include/arpa/inet.h \
  /home/taguchi/dpdk-2.0.0/x86_64-native-linuxapp-gcc/include/rte_lpm.h
